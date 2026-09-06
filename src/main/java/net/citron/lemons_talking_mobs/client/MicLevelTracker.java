@@ -10,7 +10,7 @@ public class MicLevelTracker {
     private static volatile float currentLevel = 0.0F;
     private static volatile boolean running = false;
 
-    // Buffer pro nahrávání
+    // Buffer for recording
     private static volatile boolean recording = false;
     private static final ByteArrayOutputStream recordBuffer = new ByteArrayOutputStream();
 
@@ -35,14 +35,14 @@ public class MicLevelTracker {
                 while (running) {
                     int count = line.read(buffer, 0, buffer.length);
                     if (count > 0) {
-                        // Pokud zrovna nahráváme, ukládáme syrové bajty
+
                         if (recording) {
                             synchronized (recordBuffer) {
                                 recordBuffer.write(buffer, 0, count);
                             }
                         }
 
-                        // Výpočet pro VU metr
+                        // counter for VU meter
                         double sum = 0.0;
                         int samples = count / 2;
                         for (int i = 0; i < count - 1; i += 2) {

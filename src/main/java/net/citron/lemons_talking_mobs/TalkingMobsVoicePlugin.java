@@ -3,7 +3,7 @@ package net.citron.lemons_talking_mobs;
 import de.maxhenkel.voicechat.api.ForgeVoicechatPlugin;
 import de.maxhenkel.voicechat.api.VoicechatApi;
 import de.maxhenkel.voicechat.api.VoicechatClientApi;
-import de.maxhenkel.voicechat.api.VoicechatConnection; // NEW: needed to identify which player sent a mic packet
+import de.maxhenkel.voicechat.api.VoicechatConnection;
 import de.maxhenkel.voicechat.api.VoicechatPlugin;
 import de.maxhenkel.voicechat.api.VoicechatServerApi;
 import de.maxhenkel.voicechat.api.audiochannel.ClientStaticAudioChannel;
@@ -12,6 +12,9 @@ import de.maxhenkel.voicechat.api.events.EventRegistration;
 import de.maxhenkel.voicechat.api.events.MicrophonePacketEvent;
 import de.maxhenkel.voicechat.api.events.VoicechatServerStartedEvent;
 import de.maxhenkel.voicechat.api.opus.OpusDecoder;
+import net.citron.lemons_talking_mobs.network.RecordingResultPayload; // NEW: needed to push the auto-stop result to the client
+import net.minecraft.server.level.ServerPlayer;                       // NEW
+import net.neoforged.neoforge.server.ServerLifecycleHooks;            // NEW: lets us find the ServerPlayer from just a UUID
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -20,7 +23,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap; // NEW: thread-safe per-player recording map
+import java.util.concurrent.ConcurrentHashMap;
 
 @ForgeVoicechatPlugin
 public class TalkingMobsVoicePlugin implements VoicechatPlugin {
@@ -29,20 +32,18 @@ public class TalkingMobsVoicePlugin implements VoicechatPlugin {
     private static VoicechatServerApi serverApi;
     private static VoicechatClientApi clientApi;
 
-    // CHANGED: removed the single global `isRecording` / `dataOut` / `recordedStream` static fields.
-    // Root cause of the bug: MicrophonePacketEvent only ever fires on the SERVER
-    // (it's a ServerEvent in the Simple Voice Chat API). Your old code set the
-    // recording flag from CLIENT-side GUI code, so on a real client/server split
-    // (LAN opened to others, or a dedicated server) the client and server are two
-    // separate JVMs with two separate copies of these statics — the server-side
-    // event handler never saw the client's flag change, so nothing was ever recorded.
-    // It only appeared to work in plain singleplayer because client + integrated
-    // server share the same JVM there.
-    //
-    // Fix: recording state now lives ONLY server-side, keyed by player UUID, so it's
-    // per-player and correct regardless of client/server topology. The client no
-    // longer touches these fields at all — see StartRecordingPayload / StopRecordingPayload.
-    private static final Map<UUID, ByteArrayOutputStream> ACTIVE_RECORDINGS = new ConcurrentHashMap<>();
+
+    private static final int MAX_RECORDING_SECONDS = 10;
+    private static final int MAX_RECORDING_FRAMES = (MAX_RECORDING_SECONDS * 1000) / 20;
+
+
+    private static final Map<UUID, RecordingSession> ACTIVE_RECORDINGS = new ConcurrentHashMap<>();
+
+    //  stream plus a running frame count
+    private static class RecordingSession {
+        final ByteArrayOutputStream stream = new ByteArrayOutputStream();
+        int frameCount = 0;
+    }
 
     @Override
     public String getPluginId() {
@@ -69,29 +70,49 @@ public class TalkingMobsVoicePlugin implements VoicechatPlugin {
         clientApi = event.getVoicechat();
     }
 
-    // CHANGED: this now runs purely server-side (as it always effectively did) and:
-    //   1. Identifies WHICH player sent the packet via event.getSenderConnection().
-    //   2. Only buffers audio for players who are actually in ACTIVE_RECORDINGS.
-    // Your old version had no sender check at all, so on a real server with more
-    // than one person online, whoever happened to be talking would get recorded
-    // instead of specifically the player who pressed your mod's Record button.
     private void onMicrophonePacket(MicrophonePacketEvent event) {
         VoicechatConnection sender = event.getSenderConnection();
-        if (sender == null) return; // packet wasn't sent by a real player connection
+        if (sender == null) return;
 
         UUID playerId = sender.getPlayer().getUuid();
-        ByteArrayOutputStream stream = ACTIVE_RECORDINGS.get(playerId);
-        if (stream == null) return; // this player isn't currently recording with our mod
+        RecordingSession session = ACTIVE_RECORDINGS.get(playerId);
+        if (session == null) return; // this player isn't currently recording with our mod
 
-        synchronized (stream) {
+        synchronized (session) {
+
+            if (!ACTIVE_RECORDINGS.containsKey(playerId)) return;
+
             try {
                 byte[] opusFrame = event.getPacket().getOpusEncodedData();
-                DataOutputStream dataOut = new DataOutputStream(stream);
+                DataOutputStream dataOut = new DataOutputStream(session.stream);
                 dataOut.writeShort(opusFrame.length);
                 dataOut.write(opusFrame);
+                session.frameCount++;
             } catch (IOException e) {
                 e.printStackTrace();
+                return;
             }
+
+            // hit the 10-second cap — finalize and push the result to the
+            // client automatically, exactly like a manual stop would.
+            if (session.frameCount >= MAX_RECORDING_FRAMES) {
+                ACTIVE_RECORDINGS.remove(playerId);
+                byte[] finishedAudio = session.stream.toByteArray();
+                sendResultToPlayer(playerId, finishedAudio);
+            }
+        }
+    }
+
+    // looks up the actual ServerPlayer from just a UUID (we only have the
+    // UUID inside onMicrophonePacket, not a full player/connection reference)
+    // and sends them the finished recording, same payload used for manual stop.
+    private static void sendResultToPlayer(UUID playerId, byte[] audioData) {
+        var server = ServerLifecycleHooks.getCurrentServer();
+        if (server == null) return;
+
+        ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+        if (player != null) {
+            player.connection.send(new RecordingResultPayload(audioData));
         }
     }
 
@@ -101,26 +122,19 @@ public class TalkingMobsVoicePlugin implements VoicechatPlugin {
         return currentMicLevel;
     }
 
-    // NEW: replaces the old client-callable `startRecording()`.
-    // This must only ever be called from a SERVER-side context — i.e. from the
-    // StartRecordingPayload handler in Lemons_talking_mobs, using the UUID of the
-    // player who sent the packet. Never call this from client code.
     public static void startRecordingFor(UUID playerId) {
-        ACTIVE_RECORDINGS.put(playerId, new ByteArrayOutputStream());
+        ACTIVE_RECORDINGS.put(playerId, new RecordingSession()); // CHANGED: new RecordingSession() instead of new ByteArrayOutputStream()
     }
 
-    // NEW: replaces the old client-callable `stopRecording()`.
-    // Also server-side only. Returns the finished Opus byte stream for that player,
-    // which the payload handler then sends back down to their client.
+
     public static byte[] stopRecordingFor(UUID playerId) {
-        ByteArrayOutputStream stream = ACTIVE_RECORDINGS.remove(playerId);
-        if (stream == null) return new byte[0];
-        synchronized (stream) {
-            return stream.toByteArray();
+        RecordingSession session = ACTIVE_RECORDINGS.remove(playerId);
+        if (session == null) return null;
+        synchronized (session) {
+            return session.stream.toByteArray();
         }
     }
 
-    // Unchanged — this already only ran client-side and was fine.
     public static void playRecordedPreview(byte[] recordedOpusData) {
         if (recordedOpusData == null || recordedOpusData.length == 0 || clientApi == null) return;
 

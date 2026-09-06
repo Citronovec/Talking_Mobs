@@ -1,9 +1,5 @@
 package net.citron.lemons_talking_mobs.network;
 
-// NEW FILE: sent server -> client after StopRecordingPayload is handled.
-// Carries the finished Opus byte array back down so MobSoundScreen can populate
-// recordedAudioBuffer for preview/save, exactly like the old (broken) client-only
-// stopRecording() used to return locally.
 
 import net.citron.lemons_talking_mobs.Lemons_talking_mobs;
 import net.minecraft.network.FriendlyByteBuf;

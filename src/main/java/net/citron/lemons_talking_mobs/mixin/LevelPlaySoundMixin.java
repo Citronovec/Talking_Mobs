@@ -22,9 +22,8 @@ import java.util.List;
 @Mixin(ServerLevel.class)
 public abstract class LevelPlaySoundMixin {
 
-    /**
-     * Zachytává zvuky přehrávané na souřadnicích (např. stříhání ovce nůžkami, dojení kbelíkem apod.)
-     */
+    // catching sounds played od coordinates (sheep shear)
+
     @Inject(
             method = "playSeededSound(Lnet/minecraft/world/entity/Entity;DDDLnet/minecraft/core/Holder;Lnet/minecraft/sounds/SoundSource;FFJ)V",
             at = @At("HEAD"),
@@ -46,7 +45,7 @@ public abstract class LevelPlaySoundMixin {
         SoundEvent sound = soundHolder.value();
         String soundPath = sound.location().getPath();
 
-        // Vyhledáme LivingEntity v těsném okruhu kolem souřadnic zvuku (1.5 bloku)
+        // finding LivingEntity around the coordinates
         AABB searchBox = new AABB(x - 1.5, y - 1.5, z - 1.5, x + 1.5, y + 1.5, z + 1.5);
         List<LivingEntity> nearbyEntities = level.getEntitiesOfClass(
                 LivingEntity.class,
@@ -56,15 +55,14 @@ public abstract class LevelPlaySoundMixin {
 
         for (LivingEntity entity : nearbyEntities) {
             if (checkAndPlayCustomSound(entity, soundPath)) {
-                ci.cancel(); // Stopne odeslání vanilla zvuku ostatním hráčům
+                ci.cancel();
                 return;
             }
         }
     }
 
-    /**
-     * Zachytává zvuky přehrávané přímo na konkrétní entitě
-     */
+
+    // catching sounds played on specific entity
     @Inject(
             method = "playSeededSound(Lnet/minecraft/world/entity/Entity;Lnet/minecraft/world/entity/Entity;Lnet/minecraft/core/Holder;Lnet/minecraft/sounds/SoundSource;FFJ)V",
             at = @At("HEAD"),
@@ -91,10 +89,10 @@ public abstract class LevelPlaySoundMixin {
     private static boolean checkAndPlayCustomSound(LivingEntity entity, String soundPath) {
         String entityTypeKey = BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).getPath();
 
-        // 1. Zkusíme plnou shodu (např. "entity.sheep.shear")
+
         byte[] data = ServerSoundStorage.getEffectiveSound(entity.getUUID(), entityTypeKey, soundPath);
 
-        // 2. Fallback na zkrácený klíč (např. "shear")
+        // fallback for compiling the key ("shear")
         if (data == null && soundPath.contains(".")) {
             String simplifiedKey = soundPath.substring(soundPath.lastIndexOf('.') + 1);
             data = ServerSoundStorage.getEffectiveSound(entity.getUUID(), entityTypeKey, simplifiedKey);

@@ -1,8 +1,5 @@
 package net.citron.lemons_talking_mobs.network;
 
-// NEW FILE: sent client -> server when the player presses the Record button.
-// The client no longer flips any recording flag itself — it just asks the server
-// to start capturing THIS player's mic packets. See TalkingMobsVoicePlugin.startRecordingFor().
 
 import net.citron.lemons_talking_mobs.Lemons_talking_mobs;
 import net.minecraft.network.FriendlyByteBuf;

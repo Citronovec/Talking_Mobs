@@ -14,10 +14,10 @@ import java.util.UUID;
 
 public class ServerSoundStorage {
 
-    // Maximální počet zvukových souborů držených v RAM současně
+    // Mx sound cache on RAM
     private static final int MAX_CACHE_SIZE = 250;
 
-    // Vláknově bezpečná LRU cache (při překročení kapacity automaticky uvolní nejstarší nepoužitý zvuk z RAM)
+    //  LRU cache ( when more than ram can handle, send old recorded sound from RAM)
     private static final Map<String, byte[]> MEMORY_CACHE = Collections.synchronizedMap(
             new LinkedHashMap<String, byte[]>(MAX_CACHE_SIZE, 0.75f, true) {
                 @Override
@@ -29,10 +29,9 @@ public class ServerSoundStorage {
 
     private static Path storageDir;
 
-    /**
-     * Inicializace složky ve světě (saves/<world>/talking_mobs/).
-     * Volá se při spuštění serveru v ServerStartingEvent.
-     */
+
+    //Initialization file in saves/world/talking_mobs
+    //called when server is started in ServerStartingEvent
     public static void init(MinecraftServer server) {
         Path worldDir = server.getWorldPath(LevelResource.ROOT);
         storageDir = worldDir.resolve("talking_mobs");
@@ -42,17 +41,14 @@ public class ServerSoundStorage {
                 Files.createDirectories(storageDir);
             }
             MEMORY_CACHE.clear();
-            System.out.println("[TalkingMobs] Uloziste inicializovano v: " + storageDir);
+            System.out.println("[TalkingMobs] Saving file initialize in: " + storageDir);
         } catch (IOException e) {
-            System.err.println("[TalkingMobs] Selhala inicializace slozky pro zvuky: " + e.getMessage());
+            System.err.println("[TalkingMobs] Failed to initialize saving file: " + e.getMessage());
         }
     }
 
-    /**
-     * Uloží zvuk podle zvoleného režimu:
-     * - isGlobal = true  -> creeper_death.opus (pro všechny creepery)
-     * - isGlobal = false -> <UUID>_death.opus (pouze pro tohoto konkrétního jedince)
-     */
+
+    //saving sound base on global/local mode
     public static void saveSound(UUID entityUuid, String entityTypeKey, String soundKey, byte[] opusData, boolean isGlobal) {
         String key = resolveStorageKey(entityUuid, entityTypeKey, soundKey, isGlobal);
         MEMORY_CACHE.put(key, opusData);
@@ -63,51 +59,50 @@ public class ServerSoundStorage {
                 try {
                     // CREATE + TRUNCATE_EXISTING zajistí vytvoření nebo čisté přepsání stávajícího souboru
                     Files.write(file, opusData, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-                    System.out.println("[TalkingMobs] Zvuk uspesne zapsan na disk: " + file.getFileName());
+                    System.out.println("[TalkingMobs] Sound successfully saved: " + file.getFileName());
                 } catch (IOException e) {
-                    System.err.println("[TalkingMobs] Chyba pri zapisu na disk: " + file.getFileName());
+                    System.err.println("[TalkingMobs] Error in saving sound: " + file.getFileName());
                     e.printStackTrace();
                 }
             }, "TalkingMobs-SaveThread").start();
         }
     }
 
-    /**
-     * Získá přesný zvuk pro zadaný režim (používá se při otevření GUI, kdy hráč chce vidět stav daného režimu).
-     */
+
+    //get sound for specific selected mode (global/local) (used when GUI is open)
     public static byte[] getExactSound(UUID entityUuid, String entityTypeKey, String soundKey, boolean isGlobal) {
         String key = resolveStorageKey(entityUuid, entityTypeKey, soundKey, isGlobal);
         return fetchSoundData(key);
     }
 
     /**
-     * Získá efektivní zvuk pro přehrání ve hře (např. při zranění/smrti entity):
-     * 1. Priorita: Lokální nahrávka konkrétního moba (UUID)
-     * 2. Priorita: Globální nahrávka druhu moba (EntityType)
-     * 3. Pokud neexistuje ani jedna, vrátí null (a zahraje se vanilla zvuk).
+     * get sound for playing it in game (example: entity is hurt):
+     * 1. Priority: Local recording of a specific mob (UUID)
+     * 2. Priority: Global recording of a mob specie (EntityType)
+     * 3. If no recording found call back null (play vanilla sound)
      */
+
     public static byte[] getEffectiveSound(UUID entityUuid, String entityTypeKey, String soundKey) {
-        // 1. Zkusíme specifický zvuk pro daného moba
+        // Local recording of a specific mob (UUID)
         byte[] localSound = getExactSound(entityUuid, entityTypeKey, soundKey, false);
         if (localSound != null && localSound.length > 0) {
             return localSound;
         }
 
-        // 2. Fallback na globální zvuk pro celou rasu
+        // Global recording of a mob specie (EntityType)
         return getExactSound(entityUuid, entityTypeKey, soundKey, true);
     }
 
-    /**
-     * Lazy-loading: Nejprve prohledá RAM, pokud chybí, bleskově sáhne na disk a uloží do RAM.
-     */
+
+    //Lazy-loading: Finding in ram, when is missing, find in disc and save on ram
     private static byte[] fetchSoundData(String storageKey) {
-        // 1. Kontrola v paměti
+        // finding in RAM
         byte[] cached = MEMORY_CACHE.get(storageKey);
         if (cached != null) {
             return cached;
         }
 
-        // 2. Kontrola na disku
+        // finding on disc
         if (storageDir != null) {
             Path file = storageDir.resolve(storageKey + ".opus");
             if (Files.exists(file)) {
@@ -116,7 +111,7 @@ public class ServerSoundStorage {
                     MEMORY_CACHE.put(storageKey, data);
                     return data;
                 } catch (IOException e) {
-                    System.err.println("[TalkingMobs] Nelze precist soubor: " + file.getFileName());
+                    System.err.println("[TalkingMobs] File cannot be read: " + file.getFileName());
                 }
             }
         }
@@ -124,9 +119,8 @@ public class ServerSoundStorage {
         return null;
     }
 
-    /**
-     * Sestaví normalizovaný název souboru bez nepovolených znaků.
-     */
+
+    //build normal file name
     public static String resolveStorageKey(UUID entityUuid, String entityTypeKey, String soundKey, boolean isGlobal) {
         String cleanSound = soundKey.toLowerCase().replaceAll("[^a-z0-9_\\-]", "_");
         if (isGlobal) {

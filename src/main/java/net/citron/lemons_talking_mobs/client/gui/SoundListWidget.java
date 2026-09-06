@@ -17,7 +17,7 @@ public class SoundListWidget extends ObjectSelectionList<SoundListWidget.SoundEn
         super(mc, width, height, y, itemHeight);
         this.onSelect = onSelect;
 
-        // Pokud by byl seznam prázdný, vložíme alespoň fallback
+
         if (sounds.isEmpty()) {
             this.addEntry(new SoundEntry("ambient"));
         } else {
@@ -32,13 +32,6 @@ public class SoundListWidget extends ObjectSelectionList<SoundListWidget.SoundEn
         return this.width - 10;
     }
 
-    /*
-    @Override
-    protected int getScrollbarPosition() {
-        return this.getX() + this.width - 6;
-    }
-
-     */
 
     @Override
     public void setSelected(SoundEntry entry) {
@@ -65,16 +58,16 @@ public class SoundListWidget extends ObjectSelectionList<SoundListWidget.SoundEn
             boolean isSelected = getSelected() == this;
             int textColor = isSelected ? 0xFFFF55 : (isHovered ? 0xFFFFA0 : 0xFFFFFF);
 
-            // Zkrácení textu, aby se vešel do řádku
+            // Tex compiler
             String display = Minecraft.getInstance().font.plainSubstrByWidth(soundKey.toUpperCase(), getRowWidth() - 8);
 
-            // X = 0 je střed slotu v novém renderu.
-            // drawCenteredString umístí text přímo na střed řádku bez nutnosti počítat posuny widgetu.
+            // X = 0 middle of the slot
+            // drawCenteredString set text into middle of the slot
             guiGraphics.drawCenteredString(
                     Minecraft.getInstance().font,
                     display,
-                    0,   // Střed slotu
-                    4,   // Vertikální odsazení shora v rámci slotu
+                    0,
+                    4,
                     textColor
             );
         }

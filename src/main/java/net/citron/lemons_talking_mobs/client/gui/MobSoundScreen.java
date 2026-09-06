@@ -55,6 +55,11 @@ public class MobSoundScreen extends Screen {
     private boolean isRecording = false;
     private byte[] recordedAudioBuffer = null;
 
+    private static final int MAX_RECORDING_SECONDS_DISPLAY = 10;
+
+    private long recordingStartTimeMillis = 0L;
+    private static final int MAX_RECORDING_MS = 10_000;
+
     private final List<Button> soundSlotButtons = new ArrayList<>();
     private Button saveButton;
 
@@ -79,7 +84,7 @@ public class MobSoundScreen extends Screen {
             this.selectedSound = soundKeys.get(0);
         }
 
-        // 1. Sloty zvuků v levém sloupci (8 slotů)
+        // 1 Sounds left panel (8 slots)
         soundSlotButtons.clear();
         int listStartX = this.leftPos + 8;
         int listStartY = this.topPos + 10;
@@ -99,15 +104,15 @@ public class MobSoundScreen extends Screen {
         }
         updateSoundButtons();
 
-        // 2. Klikací zóny pro ikony
-        // Zeměkoule (plných 20x20 px)
+        // 2 Icons buttons
+        // Local/ Global button
         this.addRenderableWidget(Button.builder(Component.empty(), b -> {
                     this.isGlobal = !this.isGlobal;
                     this.recordedAudioBuffer = null;
                     requestCurrentSoundFromServer();
-                    b.setTooltip(Tooltip.create(Component.literal(this.isGlobal ? "Režim: Všichni mobové tohoto druhu" : "Režim: Pouze tento konkrétní mob")));
+                    b.setTooltip(Tooltip.create(Component.literal(this.isGlobal ? "Global mode - all mobs of same species" : "Global mod of - only this mob")));
                 }).bounds(this.leftPos + 196, this.topPos + 8, 20, 19)
-                .tooltip(Tooltip.create(Component.literal(this.isGlobal ? "Režim: Všichni mobové tohoto druhu" : "Režim: Pouze tento konkrétní mob")))
+                .tooltip(Tooltip.create(Component.literal(this.isGlobal ? "Global mode - all mobs of same species" : "Global mod of - only this mob")))
                 .build()).setAlpha(0.0F);
 
         int actionY = this.topPos + 143;
@@ -115,24 +120,24 @@ public class MobSoundScreen extends Screen {
         // Record / Stop
         this.addRenderableWidget(Button.builder(Component.empty(), b -> {
                     toggleRecording();
-                    b.setTooltip(Tooltip.create(Component.literal(this.isRecording ? "Zastavit nahrávání" : "Začít nahrávat")));
+                    b.setTooltip(Tooltip.create(Component.literal(this.isRecording ? "Stop recording" : "Start recording")));
                 }).bounds(this.leftPos + 120, actionY, 16, 16)
-                .tooltip(Tooltip.create(Component.literal("Začít nahrávat")))
+                .tooltip(Tooltip.create(Component.literal("Start recording")))
                 .build()).setAlpha(0.0F);
 
         // Play Preview
         this.addRenderableWidget(Button.builder(Component.empty(), b -> playPreview())
                 .bounds(this.leftPos + 142, actionY, 16, 16)
-                .tooltip(Tooltip.create(Component.literal("Přehrát náhled")))
+                .tooltip(Tooltip.create(Component.literal("Play preview")))
                 .build()).setAlpha(0.0F);
 
         // Reset / Delete
         this.addRenderableWidget(Button.builder(Component.empty(), b -> this.recordedAudioBuffer = null)
                 .bounds(this.leftPos + 199, actionY, 16, 16)
-                .tooltip(Tooltip.create(Component.literal("Smazat nahrávku")))
+                .tooltip(Tooltip.create(Component.literal("Delete record")))
                 .build()).setAlpha(0.0F);
 
-        // 3. Tlačítko Save
+        // 3 Save Button
         this.saveButton = this.addRenderableWidget(Button.builder(
                 Component.literal("Save"),
                 b -> saveAndSendToServer()
@@ -189,85 +194,25 @@ public class MobSoundScreen extends Screen {
     }
 
 
-    /*
-    private void toggleRecording() {
-        this.isRecording = !this.isRecording;
-        if (this.isRecording) {
-            TalkingMobsVoicePlugin.startRecording();
-        } else {
-            this.recordedAudioBuffer = TalkingMobsVoicePlugin.stopRecording();
-        }
-    }
-
-     */
-
-    // CHANGED: this used to call TalkingMobsVoicePlugin.startRecording()/stopRecording()
-    // directly — static calls that only ever touched CLIENT-side memory, while the
-    // actual audio capture happens SERVER-side (MicrophonePacketEvent is a ServerEvent).
-    // That's the whole reason recording silently failed outside plain singleplayer.
-    //
-    // Now the client just tells the server to start/stop; the server does the real
-    // work and mails the finished bytes back via RecordingResultPayload -> onRecordingResult().
     private void toggleRecording() {
         this.isRecording = !this.isRecording;
         if (this.minecraft == null || this.minecraft.getConnection() == null) return;
 
         if (this.isRecording) {
+            this.recordingStartTimeMillis = System.currentTimeMillis(); // NEW: mark the start for the timer
             this.minecraft.getConnection().send(new StartRecordingPayload());
         } else {
             this.minecraft.getConnection().send(new StopRecordingPayload());
-            // Note: recordedAudioBuffer is no longer set here directly — it arrives
-            // asynchronously once the server responds, via onRecordingResult() below.
         }
     }
 
-    // NEW: called by the RecordingResultPayload handler in Lemons_talking_mobs
-    // once the server finishes assembling this player's recording.
     public void onRecordingResult(byte[] audioData) {
         this.recordedAudioBuffer = (audioData != null && audioData.length > 0) ? audioData : null;
+        this.isRecording = false;
     }
 
 
 
-/*
-    private void toggleRecording() {
-        this.isRecording = !this.isRecording;
-        if (this.isRecording) {
-            TalkingMobsVoicePlugin.startRecording();
-        } else {
-            this.recordedAudioBuffer = TalkingMobsVoicePlugin.stopRecording();
-        }
-    }
-
- */
-
-    /*
-    private void toggleRecording() {
-        this.isRecording = !this.isRecording;
-        if (this.isRecording) {
-            net.citron.lemons_talking_mobs.client.MicLevelTracker.startRecording();
-        } else {
-            byte[] rawPcm = net.citron.lemons_talking_mobs.client.MicLevelTracker.stopRecording();
-            // ZAKÓDOVÁNÍ DO OPUSU ZDE:
-            this.recordedAudioBuffer = TalkingMobsVoicePlugin.encodePcmToOpus(rawPcm);
-
-            if (this.recordedAudioBuffer == null || this.recordedAudioBuffer.length == 0) {
-                if (this.minecraft != null && this.minecraft.player != null) {
-                    this.minecraft.player.displayClientMessage(
-                            Component.literal("§cChyba: Zvuk se nepodařilo zakódovat!"), false
-                    );
-                }
-            } else {
-                if (this.minecraft != null && this.minecraft.player != null) {
-                    this.minecraft.player.displayClientMessage(
-                            Component.literal("§aÚspěch: Zakódováno " + this.recordedAudioBuffer.length + " bajtů Opusu."), false
-                    );
-                }
-            }
-        }
-    }
-
-     */
 
     private void playPreview() {
         if (this.recordedAudioBuffer != null && this.recordedAudioBuffer.length > 0) {
@@ -318,10 +263,42 @@ public class MobSoundScreen extends Screen {
 
     @Override
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
-        // 1. Podkladové okno GUI
+        // 1 GUI Backround
         guiGraphics.blit(RenderPipelines.GUI_TEXTURED, GUI_TEXTURE, this.leftPos, this.topPos, 0.0F, 0.0F, GUI_WIDTH, GUI_HEIGHT, TEX_WIDTH, TEX_HEIGHT);
 
-        // 2. Jezdec scrollbaru (zarovnán na drážku x = 114)
+
+        // rising recording timer, drawn near the record button.
+        if (this.isRecording) {
+            long elapsedMs = System.currentTimeMillis() - this.recordingStartTimeMillis;
+
+            // Client-side watchdog: stop right at 10s instead of waiting for the
+            // server's own cutoff notification to arrive. The server enforces the
+            // real limit on its own regardless — this just makes the UI feel instant.
+            if (elapsedMs >= MAX_RECORDING_MS) {
+                this.isRecording = false;
+                if (this.minecraft != null && this.minecraft.getConnection() != null) {
+                    this.minecraft.getConnection().send(new StopRecordingPayload());
+                }
+                elapsedMs = MAX_RECORDING_MS;
+            }
+
+            float progress = Mth.clamp(elapsedMs / (float) MAX_RECORDING_MS, 0.0F, 1.0F);
+            int barMaxWidth = 96;
+            int barWidth = Math.round(barMaxWidth * progress);
+
+            // Reuses the same VU-meter style strip further down in your texture,
+            // just as a rising bar instead of a mic-level bar. Turns red past 8s
+            // as a heads-up that the cutoff is close.
+            int color = progress >= 0.8F ? 0xFFFF5555 : 0xFFFFFFFF;
+            if (barWidth > 0) {
+                guiGraphics.fill(this.leftPos + 123, this.topPos + 133, this.leftPos + 123 + barWidth, this.topPos + 136, color);
+            }
+
+            String label = String.format("%.1fs / %ds", elapsedMs / 1000.0F, MAX_RECORDING_SECONDS_DISPLAY);
+            guiGraphics.drawString(this.font, label, this.leftPos + 123, this.topPos + 122, 0xFFFFFF, true);
+        }
+
+        // 2 scrollbar
         int totalItems = soundKeys.size();
         int maxScroll = Math.max(0, totalItems - VISIBLE_SLOTS);
         int thumbY = this.topPos + 8;
@@ -330,7 +307,7 @@ public class MobSoundScreen extends Screen {
         }
         guiGraphics.blit(RenderPipelines.GUI_TEXTURED, GUI_TEXTURE, this.leftPos + 106, thumbY, 232.0F, 74.0F, 12, 16, TEX_WIDTH, TEX_HEIGHT);
 
-        // 3. Přepínač režimu (Globální / Lokální)
+        // 3 Global/ Local switcher
         int globeX = this.leftPos + 198;
         int globeY = this.topPos + 8;
         boolean hoverGlobe = mouseX >= globeX && mouseX <= globeX + 20 && mouseY >= globeY && mouseY <= globeY + 20;
@@ -339,7 +316,7 @@ public class MobSoundScreen extends Screen {
         float iconV = this.isGlobal ? 91.0F : 112.0F;
         guiGraphics.blit(RenderPipelines.GUI_TEXTURED, GUI_TEXTURE, globeX, globeY, iconU, iconV, 20, 20, TEX_WIDTH, TEX_HEIGHT);
 
-        // 4. Akční tlačítka (Record / Stop / Play / Reset) — plná šířka i výška 16 px
+        // 4 Action buttons (Record / Stop / Play / Reset)
         int actionY = this.topPos + 143;
 
         // Record / Stop
@@ -361,20 +338,20 @@ public class MobSoundScreen extends Screen {
         float resetU = hoverReset ? 249.0F : 232.0F;
         guiGraphics.blit(RenderPipelines.GUI_TEXTURED, GUI_TEXTURE, resetX, actionY, resetU, 56.0F, 16, 16, TEX_WIDTH, TEX_HEIGHT);
 
-        // 5. Dynamický VU metr reagující na mikrofon
+        // 5 Color VU meter
 
         float micLevel = MicLevelTracker.getCurrentLevel();
         int maxVuWidth = 96;
         int activeWidth = Math.round(maxVuWidth * Mth.clamp(micLevel, 0.0F, 1.0F));
 
         if (activeWidth > 0) {
-            // Když se nenahrává: 40% průhlednost (0.4F), při nahrávání: 100% neprůhlednost (1.0F)
+            // 40% opacity when not recording, 100% opacity when recording
             float alpha = this.isRecording ? 1.0F : 0.4F;
 
 
-            // Vykreslíme pouze odpovídající část proužku podle hlasitosti
+
             int alphaBits = (this.isRecording ? 255 : 100) << 24;
-            int color = alphaBits | 0x00FFFFFF; // Bílá s požadovanou alfou
+            int color = alphaBits | 0x00FFFFFF;
 
 
             guiGraphics.blit(RenderPipelines.GUI_TEXTURED, GUI_TEXTURE,
@@ -389,27 +366,21 @@ public class MobSoundScreen extends Screen {
         }
 
 
-        /*
-        if (this.recordedAudioBuffer != null && this.recordedAudioBuffer.length > 0) {
-            guiGraphics.blit(RenderPipelines.GUI_TEXTURED, GUI_TEXTURE, this.leftPos + 123, this.topPos + 117, 3.0F, 212.0F, 96, 15, TEX_WIDTH, TEX_HEIGHT);
-        }
 
-         */
-
-        // 6. 3D Model entity
+        // 6 3D entity
         if (this.targetEntity != null) {
             InventoryScreen.renderEntityInInventoryFollowsMouse(
                     guiGraphics,
                     this.leftPos + 125, this.topPos + 16,
                     this.leftPos + 220, this.topPos + 115,
-                    28,
+                    32,
                     0.0625f,
                     mouseX, mouseY,
                     this.targetEntity
             );
         }
 
-        // 7. Vanilla widgety navrch
+        // 7 Vanilla widget on top
         super.render(guiGraphics, mouseX, mouseY, partialTick);
     }
 

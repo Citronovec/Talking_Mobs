@@ -1,8 +1,5 @@
 package net.citron.lemons_talking_mobs.network;
 
-// NEW FILE: sent client -> server when the player presses Stop.
-// The server finalizes that player's buffer and sends the result back via
-// RecordingResultPayload so the client can preview/save it, same as before.
 
 import net.citron.lemons_talking_mobs.Lemons_talking_mobs;
 import net.minecraft.network.FriendlyByteBuf;

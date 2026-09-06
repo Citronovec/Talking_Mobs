@@ -17,27 +17,27 @@ public class ClientInteractHandler {
 
     @SubscribeEvent
     public static void onEntityInteract(PlayerInteractEvent.EntityInteract event) {
-        // 1. Zpracováváme pouze hlavní ruku, aby se event nespouštěl dvakrát (pro obě ruce)
+        // only main hand
         if (event.getHand() != InteractionHand.MAIN_HAND) {
             return;
         }
 
         Player player = event.getEntity();
 
-        // 2. Kontrola, zda hráč drží Shift (plížení) a klikl na živou bytost
+        //  is sneaking
         if (player.isShiftKeyDown() && event.getTarget() instanceof LivingEntity livingTarget) {
 
-            // 3. Kontrola, aby hráč neklikal sám na sebe (např. ve 3rd person pohledu)
+
             if (livingTarget == player) {
                 return;
             }
 
-            // 4. Otevření obrazovky na klientovi
+            // open GUI
             if (event.getLevel().isClientSide()) {
                 Minecraft.getInstance().setScreen(new MobSoundScreen(livingTarget));
             }
 
-            // 5. Zrušení vanilla chování (zabrání nasednutí, krmení, otevření cizího GUI)
+            // cancel vanilla events
             event.setCancellationResult(InteractionResult.SUCCESS);
             event.setCanceled(true);
         }

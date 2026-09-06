@@ -17,26 +17,26 @@ public abstract class EntityPlaySoundMixin {
     private void onPlaySound(SoundEvent sound, float volume, float pitch, CallbackInfo ci) {
         Entity entity = (Entity) (Object) this;
 
-        // Kontrola, aby kód běžel výhradně na serveru
+        // only run on server
         if (entity.level().isClientSide()) return;
 
-        // Typ entity (např. "creeper", "cow", "warden")
+        // entity type
         String entityTypeKey = BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).getPath();
 
-        // Klíč zvuku (např. "entity.creeper.death" -> "death" nebo celý path)
+        // Sound key (např. "entity.creeper.death" -> "death" or full path)
         String soundKey = sound.location().getPath();
         //String soundKey = sound.getLocation().getPath();
 
-        // 1. Zkusíme přímou shodu se soundKey (např. "entity.creeper.death")
+        // try compare data with soundKey
         byte[] data = ServerSoundStorage.getEffectiveSound(entity.getUUID(), entityTypeKey, soundKey);
 
-        // 2. Pokud nic nenajde, zkusíme zjednodušený suffix (např. z "entity.creeper.death" vezmeme jen "death")
+        // if not playing try simple suffix ("entity.creeper.death" -> "death")
         if (data == null && soundKey.contains(".")) {
             String simplifiedKey = soundKey.substring(soundKey.lastIndexOf('.') + 1);
             data = ServerSoundStorage.getEffectiveSound(entity.getUUID(), entityTypeKey, simplifiedKey);
         }
 
-        // 3. Pokud zvuk existuje: odehrajeme náš zvuk a ZRUŠÍME vanilla zvuk
+        // if sound exist play recordet sound and cancel vanilla sound
         if (data != null && data.length > 0) {
             MobVoicePlayer.playCustomMobSound(entity, data);
             ci.cancel(); // Stopne vanilla přehrání
