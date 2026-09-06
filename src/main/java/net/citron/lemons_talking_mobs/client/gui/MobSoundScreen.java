@@ -110,7 +110,7 @@ public class MobSoundScreen extends Screen {
                     this.isGlobal = !this.isGlobal;
                     this.recordedAudioBuffer = null;
                     requestCurrentSoundFromServer();
-                    b.setTooltip(Tooltip.create(Component.literal(this.isGlobal ? "Global mode - all mobs of same species" : "Global mod of - only this mob")));
+                    b.setTooltip(Tooltip.create(Component.literal(this.isGlobal ? "Global mode - all mobs of same species" : "Global mod off - only this mob")));
                 }).bounds(this.leftPos + 196, this.topPos + 8, 20, 19)
                 .tooltip(Tooltip.create(Component.literal(this.isGlobal ? "Global mode - all mobs of same species" : "Global mod of - only this mob")))
                 .build()).setAlpha(0.0F);
