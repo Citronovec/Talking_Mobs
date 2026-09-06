@@ -64,6 +64,10 @@ ordering = "NONE"
 # Side this dependency is applied on - BOTH, CLIENT, or SERVER
 side = "BOTH"
 # Here's another dependency
+[[plugins]]
+modId = "voicechat"
+entrypoint = "net.citron.lemons_talking_mobs.TalkingMobsVoicePlugin"
+
 [[dependencies."${mod_id}"]]
 modId="voicechat_api"
 type="required"

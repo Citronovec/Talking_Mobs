@@ -1,23 +1,61 @@
 package net.citron.lemons_talking_mobs.client.gui;
 
+import net.citron.lemons_talking_mobs.Lemons_talking_mobs;
+import net.citron.lemons_talking_mobs.TalkingMobsVoicePlugin;
+import net.citron.lemons_talking_mobs.client.DynamicSoundRegistry;
+import net.citron.lemons_talking_mobs.client.MicLevelTracker;
+import net.citron.lemons_talking_mobs.network.RequestMobSoundPayload;
+import net.citron.lemons_talking_mobs.network.SaveMobSoundPayload;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
+import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.resources.sounds.SimpleSoundInstance;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.util.Mth;
 import net.minecraft.world.entity.LivingEntity;
+import net.citron.lemons_talking_mobs.network.StartRecordingPayload;
+import net.citron.lemons_talking_mobs.network.StopRecordingPayload;
+import com.mojang.blaze3d.pipeline.RenderPipeline;
+import com.mojang.blaze3d.systems.RenderSystem;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public class MobSoundScreen extends Screen {
 
-    private final LivingEntity targetEntity;
-    private final List<String> soundTypes = List.of("ambient", "hurt", "death", "step");
-    private String selectedSound = "ambient";
-    private boolean isRecording = false;
+    private static final Identifier GUI_TEXTURE = Identifier.fromNamespaceAndPath(
+            Lemons_talking_mobs.MODID, "textures/gui/mob_speeker_gui.png"
+    );
 
-    private Button recordButton;
-    private Button previewButton;
+    private static final int GUI_WIDTH = 230;
+    private static final int GUI_HEIGHT = 210;
+    private static final int TEX_WIDTH = 512;
+    private static final int TEX_HEIGHT = 512;
+
+    private static final int VISIBLE_SLOTS = 8;
+    private static final int SLOT_HEIGHT = 23;
+
+    private final LivingEntity targetEntity;
+    private Map<String, SoundEvent> availableSounds;
+    private List<String> soundKeys = new ArrayList<>();
+    private String selectedSound = "";
+
+    private int leftPos;
+    private int topPos;
+    private int scrollOffset = 0;
+
+    private boolean isGlobal = true;
+    private boolean isRecording = false;
+    private byte[] recordedAudioBuffer = null;
+
+    private final List<Button> soundSlotButtons = new ArrayList<>();
     private Button saveButton;
 
     public MobSoundScreen(LivingEntity entity) {
@@ -29,93 +67,360 @@ public class MobSoundScreen extends Screen {
     protected void init() {
         super.init();
 
-        int centerX = this.width / 2;
-        int centerY = this.height / 2;
+        MicLevelTracker.start();
 
-        // 1. Tlačítka pro výběr kategorie zvuku (vlevo)
-        int listY = centerY - 50;
-        for (String soundKey : soundTypes) {
-            this.addRenderableWidget(Button.builder(
-                    Component.literal(soundKey.toUpperCase()),
-                    btn -> this.selectedSound = soundKey
-            ).bounds(centerX - 170, listY, 80, 20).build());
-            listY += 24;
+        this.leftPos = (this.width - GUI_WIDTH) / 2;
+        this.topPos = (this.height - GUI_HEIGHT) / 2;
+
+        this.availableSounds = DynamicSoundRegistry.getSoundsForEntity(this.targetEntity);
+        this.soundKeys = new ArrayList<>(this.availableSounds.keySet());
+
+        if (!soundKeys.isEmpty() && this.selectedSound.isEmpty()) {
+            this.selectedSound = soundKeys.get(0);
         }
 
-        // 2. Akční tlačítka (pod náhledem entity a vpravo)
-        recordButton = this.addRenderableWidget(Button.builder(
-                Component.literal("Record"),
-                btn -> toggleRecording()
-        ).bounds(centerX + 60, centerY - 30, 90, 20).build());
+        // 1. Sloty zvuků v levém sloupci (8 slotů)
+        soundSlotButtons.clear();
+        int listStartX = this.leftPos + 8;
+        int listStartY = this.topPos + 10;
 
-        previewButton = this.addRenderableWidget(Button.builder(
-                Component.literal("Preview"),
-                btn -> playPreview()
-        ).bounds(centerX + 60, centerY - 5, 90, 20).build());
+        for (int i = 0; i < VISIBLE_SLOTS; i++) {
+            final int slotIndex = i;
+            int y = listStartY + (i * SLOT_HEIGHT);
 
-        saveButton = this.addRenderableWidget(Button.builder(
-                Component.literal("Save & Apply"),
-                btn -> saveAndSendToServer()
-        ).bounds(centerX + 60, centerY + 20, 90, 20).build());
+            Button btn = this.addRenderableWidget(Button.builder(Component.empty(), b -> {
+                int dataIndex = scrollOffset + slotIndex;
+                if (dataIndex < soundKeys.size()) {
+                    selectSound(soundKeys.get(dataIndex));
+                }
+            }).bounds(listStartX, y, 98, 20).build());
 
-        // Tlačítko pro zavření
-        this.addRenderableWidget(Button.builder(
-                Component.literal("Cancel"),
-                btn -> this.onClose()
-        ).bounds(centerX + 60, centerY + 50, 90, 20).build());
+            soundSlotButtons.add(btn);
+        }
+        updateSoundButtons();
+
+        // 2. Klikací zóny pro ikony
+        // Zeměkoule (plných 20x20 px)
+        this.addRenderableWidget(Button.builder(Component.empty(), b -> {
+                    this.isGlobal = !this.isGlobal;
+                    this.recordedAudioBuffer = null;
+                    requestCurrentSoundFromServer();
+                    b.setTooltip(Tooltip.create(Component.literal(this.isGlobal ? "Režim: Všichni mobové tohoto druhu" : "Režim: Pouze tento konkrétní mob")));
+                }).bounds(this.leftPos + 196, this.topPos + 8, 20, 19)
+                .tooltip(Tooltip.create(Component.literal(this.isGlobal ? "Režim: Všichni mobové tohoto druhu" : "Režim: Pouze tento konkrétní mob")))
+                .build()).setAlpha(0.0F);
+
+        int actionY = this.topPos + 143;
+
+        // Record / Stop
+        this.addRenderableWidget(Button.builder(Component.empty(), b -> {
+                    toggleRecording();
+                    b.setTooltip(Tooltip.create(Component.literal(this.isRecording ? "Zastavit nahrávání" : "Začít nahrávat")));
+                }).bounds(this.leftPos + 120, actionY, 16, 16)
+                .tooltip(Tooltip.create(Component.literal("Začít nahrávat")))
+                .build()).setAlpha(0.0F);
+
+        // Play Preview
+        this.addRenderableWidget(Button.builder(Component.empty(), b -> playPreview())
+                .bounds(this.leftPos + 142, actionY, 16, 16)
+                .tooltip(Tooltip.create(Component.literal("Přehrát náhled")))
+                .build()).setAlpha(0.0F);
+
+        // Reset / Delete
+        this.addRenderableWidget(Button.builder(Component.empty(), b -> this.recordedAudioBuffer = null)
+                .bounds(this.leftPos + 199, actionY, 16, 16)
+                .tooltip(Tooltip.create(Component.literal("Smazat nahrávku")))
+                .build()).setAlpha(0.0F);
+
+        // 3. Tlačítko Save
+        this.saveButton = this.addRenderableWidget(Button.builder(
+                Component.literal("Save"),
+                b -> saveAndSendToServer()
+        ).bounds(this.leftPos + 120, this.topPos + 172, 95, 22).build());
+
+        requestCurrentSoundFromServer();
     }
 
+    private void selectSound(String newSoundKey) {
+        if (this.selectedSound.equalsIgnoreCase(newSoundKey)) return;
+        this.selectedSound = newSoundKey;
+        this.recordedAudioBuffer = null;
+        updateSoundButtons();
+        requestCurrentSoundFromServer();
+    }
+
+    private void updateSoundButtons() {
+        for (int i = 0; i < VISIBLE_SLOTS; i++) {
+            Button btn = soundSlotButtons.get(i);
+            int dataIndex = scrollOffset + i;
+
+            if (dataIndex < soundKeys.size()) {
+                String key = soundKeys.get(dataIndex);
+                btn.visible = true;
+
+                String shortKey = key.length() > 10 ? key.substring(0, 9) + "…" : key;
+                if (key.equals(this.selectedSound)) {
+                    btn.setMessage(Component.literal("§e> " + shortKey));
+                } else {
+                    btn.setMessage(Component.literal(shortKey));
+                }
+            } else {
+                btn.visible = false;
+            }
+        }
+    }
+
+    private void requestCurrentSoundFromServer() {
+        if (!this.selectedSound.isEmpty() && this.minecraft != null && this.minecraft.getConnection() != null) {
+            String entityTypeKey = BuiltInRegistries.ENTITY_TYPE.getKey(this.targetEntity.getType()).getPath();
+            this.minecraft.getConnection().send(new RequestMobSoundPayload(
+                    this.targetEntity.getUUID(),
+                    entityTypeKey,
+                    this.selectedSound,
+                    this.isGlobal
+            ));
+        }
+    }
+
+    public void onSoundSynced(String soundKey, byte[] audioData) {
+        if (this.selectedSound.equalsIgnoreCase(soundKey)) {
+            this.recordedAudioBuffer = (audioData != null && audioData.length > 0) ? audioData : null;
+        }
+    }
+
+
+    /*
     private void toggleRecording() {
-        isRecording = !isRecording;
-        if (isRecording) {
-            recordButton.setMessage(Component.literal("§c● STOP"));
-            // TODO: Spustit AudioRecorder / Voice Chat nahrávání
+        this.isRecording = !this.isRecording;
+        if (this.isRecording) {
+            TalkingMobsVoicePlugin.startRecording();
         } else {
-            recordButton.setMessage(Component.literal("Record"));
-            // TODO: Zastavit nahrávání a uložit do dočasného bufferu
+            this.recordedAudioBuffer = TalkingMobsVoicePlugin.stopRecording();
         }
     }
+
+     */
+
+    // CHANGED: this used to call TalkingMobsVoicePlugin.startRecording()/stopRecording()
+    // directly — static calls that only ever touched CLIENT-side memory, while the
+    // actual audio capture happens SERVER-side (MicrophonePacketEvent is a ServerEvent).
+    // That's the whole reason recording silently failed outside plain singleplayer.
+    //
+    // Now the client just tells the server to start/stop; the server does the real
+    // work and mails the finished bytes back via RecordingResultPayload -> onRecordingResult().
+    private void toggleRecording() {
+        this.isRecording = !this.isRecording;
+        if (this.minecraft == null || this.minecraft.getConnection() == null) return;
+
+        if (this.isRecording) {
+            this.minecraft.getConnection().send(new StartRecordingPayload());
+        } else {
+            this.minecraft.getConnection().send(new StopRecordingPayload());
+            // Note: recordedAudioBuffer is no longer set here directly — it arrives
+            // asynchronously once the server responds, via onRecordingResult() below.
+        }
+    }
+
+    // NEW: called by the RecordingResultPayload handler in Lemons_talking_mobs
+    // once the server finishes assembling this player's recording.
+    public void onRecordingResult(byte[] audioData) {
+        this.recordedAudioBuffer = (audioData != null && audioData.length > 0) ? audioData : null;
+    }
+
+
+
+/*
+    private void toggleRecording() {
+        this.isRecording = !this.isRecording;
+        if (this.isRecording) {
+            TalkingMobsVoicePlugin.startRecording();
+        } else {
+            this.recordedAudioBuffer = TalkingMobsVoicePlugin.stopRecording();
+        }
+    }
+
+ */
+
+    /*
+    private void toggleRecording() {
+        this.isRecording = !this.isRecording;
+        if (this.isRecording) {
+            net.citron.lemons_talking_mobs.client.MicLevelTracker.startRecording();
+        } else {
+            byte[] rawPcm = net.citron.lemons_talking_mobs.client.MicLevelTracker.stopRecording();
+            // ZAKÓDOVÁNÍ DO OPUSU ZDE:
+            this.recordedAudioBuffer = TalkingMobsVoicePlugin.encodePcmToOpus(rawPcm);
+
+            if (this.recordedAudioBuffer == null || this.recordedAudioBuffer.length == 0) {
+                if (this.minecraft != null && this.minecraft.player != null) {
+                    this.minecraft.player.displayClientMessage(
+                            Component.literal("§cChyba: Zvuk se nepodařilo zakódovat!"), false
+                    );
+                }
+            } else {
+                if (this.minecraft != null && this.minecraft.player != null) {
+                    this.minecraft.player.displayClientMessage(
+                            Component.literal("§aÚspěch: Zakódováno " + this.recordedAudioBuffer.length + " bajtů Opusu."), false
+                    );
+                }
+            }
+        }
+    }
+
+     */
 
     private void playPreview() {
-        // TODO: Přehrát do sluchátek nahraný buffer
+        if (this.recordedAudioBuffer != null && this.recordedAudioBuffer.length > 0) {
+            TalkingMobsVoicePlugin.playRecordedPreview(this.recordedAudioBuffer);
+            return;
+        }
+
+        if (this.availableSounds != null && this.availableSounds.containsKey(this.selectedSound)) {
+            SoundEvent event = this.availableSounds.get(this.selectedSound);
+            if (event != null && this.minecraft != null) {
+                this.minecraft.getSoundManager().play(SimpleSoundInstance.forUI(event, 1.0F, 1.0F));
+            }
+        }
     }
 
     private void saveAndSendToServer() {
-        // TODO: Poslat packet se zvukem na server pro targetEntity.getId()
+        if (this.recordedAudioBuffer != null && this.recordedAudioBuffer.length > 0) {
+            if (this.minecraft != null && this.minecraft.getConnection() != null) {
+                String entityTypeKey = BuiltInRegistries.ENTITY_TYPE.getKey(this.targetEntity.getType()).getPath();
+                this.minecraft.getConnection().send(new SaveMobSoundPayload(
+                        this.targetEntity.getUUID(),
+                        entityTypeKey,
+                        this.selectedSound,
+                        this.recordedAudioBuffer,
+                        this.isGlobal
+                ));
+            }
+        }
         this.onClose();
     }
 
     @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        int maxScrollOffset = Math.max(0, soundKeys.size() - VISIBLE_SLOTS);
+        if (maxScrollOffset > 0) {
+            if (scrollY > 0 && scrollOffset > 0) {
+                scrollOffset--;
+                updateSoundButtons();
+                return true;
+            } else if (scrollY < 0 && scrollOffset < maxScrollOffset) {
+                scrollOffset++;
+                updateSoundButtons();
+                return true;
+            }
+        }
+        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+    }
+
+    @Override
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
-        // Tmavé poloprůhledné pozadí
-        this.renderBackground(guiGraphics, mouseX, mouseY, partialTick);
+        // 1. Podkladové okno GUI
+        guiGraphics.blit(RenderPipelines.GUI_TEXTURED, GUI_TEXTURE, this.leftPos, this.topPos, 0.0F, 0.0F, GUI_WIDTH, GUI_HEIGHT, TEX_WIDTH, TEX_HEIGHT);
 
-        int centerX = this.width / 2;
-        int centerY = this.height / 2;
+        // 2. Jezdec scrollbaru (zarovnán na drážku x = 114)
+        int totalItems = soundKeys.size();
+        int maxScroll = Math.max(0, totalItems - VISIBLE_SLOTS);
+        int thumbY = this.topPos + 8;
+        if (maxScroll > 0) {
+            thumbY += (int) (((float) this.scrollOffset / maxScroll) * (190 - 15));
+        }
+        guiGraphics.blit(RenderPipelines.GUI_TEXTURED, GUI_TEXTURE, this.leftPos + 106, thumbY, 232.0F, 74.0F, 12, 16, TEX_WIDTH, TEX_HEIGHT);
 
-        // Nadpis
-        guiGraphics.drawCenteredString(this.font, this.title, centerX, centerY - 80, 0xFFFFFF);
+        // 3. Přepínač režimu (Globální / Lokální)
+        int globeX = this.leftPos + 198;
+        int globeY = this.topPos + 8;
+        boolean hoverGlobe = mouseX >= globeX && mouseX <= globeX + 20 && mouseY >= globeY && mouseY <= globeY + 20;
 
-        // Informace o vybraném zvuku
-        guiGraphics.drawString(this.font, "Typ: §e" + selectedSound, centerX + 60, centerY - 50, 0xAAAAAA);
+        float iconU = hoverGlobe ? 253.0F : 232.0F;
+        float iconV = this.isGlobal ? 91.0F : 112.0F;
+        guiGraphics.blit(RenderPipelines.GUI_TEXTURED, GUI_TEXTURE, globeX, globeY, iconU, iconV, 20, 20, TEX_WIDTH, TEX_HEIGHT);
 
-        // 3. Vykreslení živé 3D entity uprostřed obrazovky
-        if (targetEntity != null) {
-            InventoryScreen.renderEntityInInventoryFollowsAngle(
+        // 4. Akční tlačítka (Record / Stop / Play / Reset) — plná šířka i výška 16 px
+        int actionY = this.topPos + 143;
+
+        // Record / Stop
+        int recX = this.leftPos + 120;
+        boolean hoverRec = mouseX >= recX && mouseX <= recX + 16 && mouseY >= actionY && mouseY <= actionY + 16;
+        float recU = hoverRec ? 249.0F : 232.0F;
+        float recV = this.isRecording ? 21.0F : 3.0F;
+        guiGraphics.blit(RenderPipelines.GUI_TEXTURED, GUI_TEXTURE, recX, actionY, recU, recV, 16, 16, TEX_WIDTH, TEX_HEIGHT);
+
+        // Play Preview
+        int playX = this.leftPos + 142;
+        boolean hoverPlay = mouseX >= playX && mouseX <= playX + 16 && mouseY >= actionY && mouseY <= actionY + 16;
+        float playU = hoverPlay ? 249.0F : 232.0F;
+        guiGraphics.blit(RenderPipelines.GUI_TEXTURED, GUI_TEXTURE, playX, actionY, playU, 39.0F, 16, 16, TEX_WIDTH, TEX_HEIGHT);
+
+        // Reset / Delete
+        int resetX = this.leftPos + 199;
+        boolean hoverReset = mouseX >= resetX && mouseX <= resetX + 16 && mouseY >= actionY && mouseY <= actionY + 17;
+        float resetU = hoverReset ? 249.0F : 232.0F;
+        guiGraphics.blit(RenderPipelines.GUI_TEXTURED, GUI_TEXTURE, resetX, actionY, resetU, 56.0F, 16, 16, TEX_WIDTH, TEX_HEIGHT);
+
+        // 5. Dynamický VU metr reagující na mikrofon
+
+        float micLevel = MicLevelTracker.getCurrentLevel();
+        int maxVuWidth = 96;
+        int activeWidth = Math.round(maxVuWidth * Mth.clamp(micLevel, 0.0F, 1.0F));
+
+        if (activeWidth > 0) {
+            // Když se nenahrává: 40% průhlednost (0.4F), při nahrávání: 100% neprůhlednost (1.0F)
+            float alpha = this.isRecording ? 1.0F : 0.4F;
+
+
+            // Vykreslíme pouze odpovídající část proužku podle hlasitosti
+            int alphaBits = (this.isRecording ? 255 : 100) << 24;
+            int color = alphaBits | 0x00FFFFFF; // Bílá s požadovanou alfou
+
+
+            guiGraphics.blit(RenderPipelines.GUI_TEXTURED, GUI_TEXTURE,
+                    this.leftPos + 123,
+                    this.topPos + 117,
+                    3.0F, 212.0F,
+                    activeWidth, 15,
+                    TEX_WIDTH,
+                    TEX_HEIGHT, color);
+
+
+        }
+
+
+        /*
+        if (this.recordedAudioBuffer != null && this.recordedAudioBuffer.length > 0) {
+            guiGraphics.blit(RenderPipelines.GUI_TEXTURED, GUI_TEXTURE, this.leftPos + 123, this.topPos + 117, 3.0F, 212.0F, 96, 15, TEX_WIDTH, TEX_HEIGHT);
+        }
+
+         */
+
+        // 6. 3D Model entity
+        if (this.targetEntity != null) {
+            InventoryScreen.renderEntityInInventoryFollowsMouse(
                     guiGraphics,
-                    centerX - 10, centerY - 40, centerX + 30, centerY + 40,
-                    30, // Měřítko (velikost moba)
+                    this.leftPos + 125, this.topPos + 16,
+                    this.leftPos + 220, this.topPos + 115,
+                    28,
                     0.0625f,
                     mouseX, mouseY,
-                    targetEntity
+                    this.targetEntity
             );
         }
 
+        // 7. Vanilla widgety navrch
         super.render(guiGraphics, mouseX, mouseY, partialTick);
     }
 
     @Override
     public boolean isPauseScreen() {
-        return false; // Hra běží dál na pozadí (důležité pro multiplayer)
+        return false;
+    }
+
+    @Override
+    public void onClose() {
+        MicLevelTracker.stop();
+        super.onClose();
     }
 }

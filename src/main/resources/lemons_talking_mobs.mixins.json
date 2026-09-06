@@ -4,6 +4,8 @@
   "package": "net.citron.lemons_talking_mobs.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "EntityPlaySoundMixin",
+    "LevelPlaySoundMixin"
   ],
   "client": [
   ],

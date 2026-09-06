@@ -1,0 +1,156 @@
+package net.citron.lemons_talking_mobs;
+
+import de.maxhenkel.voicechat.api.ForgeVoicechatPlugin;
+import de.maxhenkel.voicechat.api.VoicechatApi;
+import de.maxhenkel.voicechat.api.VoicechatClientApi;
+import de.maxhenkel.voicechat.api.VoicechatPlugin;
+import de.maxhenkel.voicechat.api.VoicechatServerApi;
+import de.maxhenkel.voicechat.api.audiochannel.ClientStaticAudioChannel;
+import de.maxhenkel.voicechat.api.events.ClientVoicechatInitializationEvent;
+import de.maxhenkel.voicechat.api.events.EventRegistration;
+import de.maxhenkel.voicechat.api.events.MicrophonePacketEvent;
+import de.maxhenkel.voicechat.api.events.VoicechatServerStartedEvent;
+import de.maxhenkel.voicechat.api.opus.OpusDecoder;
+import de.maxhenkel.voicechat.api.events.EventRegistration;
+
+
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.util.UUID;
+
+@ForgeVoicechatPlugin
+public class TalkingMobsVoicePlugin implements VoicechatPlugin {
+
+    private static VoicechatApi api;
+    private static VoicechatServerApi serverApi;
+    private static VoicechatClientApi clientApi;
+
+    private static volatile boolean isRecording = false;
+    private static final Object RECORD_LOCK = new Object();
+    private static ByteArrayOutputStream recordedStream;
+    private static DataOutputStream dataOut;
+
+    @Override
+    public String getPluginId() {
+        return Lemons_talking_mobs.MODID;
+    }
+
+    @Override
+    public void initialize(VoicechatApi api) {
+        TalkingMobsVoicePlugin.api = api;
+    }
+
+    @Override
+    public void registerEvents(EventRegistration registration) {
+        registration.registerEvent(VoicechatServerStartedEvent.class, this::onServerStarted);
+        registration.registerEvent(ClientVoicechatInitializationEvent.class, this::onClientInit);
+        registration.registerEvent(MicrophonePacketEvent.class, this::onMicrophonePacket);
+    }
+
+
+
+    private void onServerStarted(VoicechatServerStartedEvent event) {
+        serverApi = event.getVoicechat();
+    }
+
+    private void onClientInit(ClientVoicechatInitializationEvent event) {
+        clientApi = event.getVoicechat();
+    }
+
+    private void onMicrophonePacket(MicrophonePacketEvent event) {
+        if (!isRecording) return;
+
+        synchronized (RECORD_LOCK) {
+            if (dataOut != null) {
+                try {
+                    byte[] opusFrame = event.getPacket().getOpusEncodedData();
+                    dataOut.writeShort(opusFrame.length);
+                    dataOut.write(opusFrame);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
+    private static float currentMicLevel = 0.0F;
+
+    public static float getCurrentMicLevel() {
+        // Vrací normalizovanou hodnotu od 0.0F (ticho) do 1.0F (max hlasitost)
+        return currentMicLevel;
+    }
+
+    public static void startRecording() {
+        synchronized (RECORD_LOCK) {
+            recordedStream = new ByteArrayOutputStream();
+            dataOut = new DataOutputStream(recordedStream);
+            isRecording = true;
+        }
+    }
+
+    public static byte[] stopRecording() {
+        synchronized (RECORD_LOCK) {
+            isRecording = false;
+            if (dataOut != null) {
+                try {
+                    dataOut.flush();
+                } catch (IOException ignored) {}
+            }
+            byte[] result = recordedStream != null ? recordedStream.toByteArray() : new byte[0];
+            dataOut = null;
+            recordedStream = null;
+            return result;
+        }
+    }
+
+    // Přehrání náhledu přímo do sluchátek hráče
+    public static void playRecordedPreview(byte[] recordedOpusData) {
+        if (recordedOpusData == null || recordedOpusData.length == 0 || clientApi == null) return;
+
+        ClientStaticAudioChannel channel = clientApi.createStaticAudioChannel(UUID.randomUUID());
+        if (channel == null) return;
+
+        new Thread(() -> {
+            // Získání klientského Opus dekodéru z Voice Chat API
+            OpusDecoder decoder = api.createDecoder();
+
+            try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(recordedOpusData))) {
+                while (in.available() > 0) {
+                    short length = in.readShort();
+                    byte[] opusFrame = new byte[length];
+                    in.readFully(opusFrame);
+
+                    // Dekódování komprimovaného Opus rámce na surové short vzorky (PCM)
+                    short[] rawAudio = decoder.decode(opusFrame);
+
+                    // Přehrání do klientského kanálu
+                    channel.play(rawAudio);
+
+                    Thread.sleep(20); // Interval 20 ms pro plynulý poslech
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            } finally {
+                if (decoder != null) {
+                    decoder.close();
+                }
+            }
+        }, "MobSound-OpusPreview-Thread").start();
+    }
+
+    public static VoicechatServerApi getServerApi() {
+        return serverApi;
+    }
+
+    public static VoicechatClientApi getClientApi() {
+        return clientApi;
+    }
+
+    public static VoicechatApi getApi() {
+        return api;
+    }
+}
