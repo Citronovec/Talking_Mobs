@@ -68,6 +68,28 @@ public class ServerSoundStorage {
         }
     }
 
+    //deleting record option
+
+    public static void deleteSound(UUID entityUuid, String entityTypeKey, String soundKey, boolean isGlobal) {
+        String key = resolveStorageKey(entityUuid, entityTypeKey, soundKey, isGlobal);
+        MEMORY_CACHE.remove(key);
+
+        if (storageDir != null) {
+            Path file = storageDir.resolve(key + ".opus");
+            try {
+                boolean deleted = Files.deleteIfExists(file);
+                if (deleted) {
+                    System.out.println("[TalkingMobs] Sound successfully deleted: " + file.getFileName());
+                } else {
+                    System.out.println("[TalkingMobs] No file to delete (already absent): " + file.getFileName());
+                }
+            } catch (IOException e) {
+                System.err.println("[TalkingMobs] Error deleting sound: " + file.getFileName());
+                e.printStackTrace();
+            }
+        }
+    }
+
 
     //get sound for specific selected mode (global/local) (used when GUI is open)
     public static byte[] getExactSound(UUID entityUuid, String entityTypeKey, String soundKey, boolean isGlobal) {

@@ -21,6 +21,7 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.entity.LivingEntity;
 import net.citron.lemons_talking_mobs.network.StartRecordingPayload;
 import net.citron.lemons_talking_mobs.network.StopRecordingPayload;
+import net.citron.lemons_talking_mobs.network.DeleteMobSoundPayload;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.systems.RenderSystem;
 
@@ -117,6 +118,7 @@ public class MobSoundScreen extends Screen {
 
         int actionY = this.topPos + 143;
 
+
         // Record / Stop
         this.addRenderableWidget(Button.builder(Component.empty(), b -> {
                     toggleRecording();
@@ -131,8 +133,8 @@ public class MobSoundScreen extends Screen {
                 .tooltip(Tooltip.create(Component.literal("Play preview")))
                 .build()).setAlpha(0.0F);
 
-        // Reset / Delete
-        this.addRenderableWidget(Button.builder(Component.empty(), b -> this.recordedAudioBuffer = null)
+        //  Delete record
+        this.addRenderableWidget(Button.builder(Component.empty(), b -> deleteSavedSound())
                 .bounds(this.leftPos + 199, actionY, 16, 16)
                 .tooltip(Tooltip.create(Component.literal("Delete record")))
                 .build()).setAlpha(0.0F);
@@ -145,6 +147,21 @@ public class MobSoundScreen extends Screen {
 
         requestCurrentSoundFromServer();
     }
+
+    private void deleteSavedSound() {
+        if (this.minecraft != null && this.minecraft.getConnection() != null) {
+            String entityTypeKey = BuiltInRegistries.ENTITY_TYPE.getKey(this.targetEntity.getType()).getPath();
+            this.minecraft.getConnection().send(new DeleteMobSoundPayload(
+                    this.targetEntity.getUUID(),
+                    entityTypeKey,
+                    this.selectedSound,
+                    this.isGlobal
+            ));
+        }
+        this.recordedAudioBuffer = null;
+    }
+
+
 
     private void selectSound(String newSoundKey) {
         if (this.selectedSound.equalsIgnoreCase(newSoundKey)) return;

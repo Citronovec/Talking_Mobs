@@ -139,6 +139,25 @@ public class Lemons_talking_mobs {
                 }
         );
 
+        // Delete record (Client -> Server)
+        registrar.playToServer(
+                DeleteMobSoundPayload.TYPE,
+                DeleteMobSoundPayload.STREAM_CODEC,
+                (payload, context) -> {
+                    context.enqueueWork(() -> {
+                        ServerSoundStorage.deleteSound(
+                                payload.entityUuid(),
+                                payload.entityTypeKey(),
+                                payload.soundKey(),
+                                payload.isGlobal()
+                        );
+                        if (context.player() instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
+                            serverPlayer.connection.send(new SyncMobSoundPayload(payload.entityUuid(), payload.soundKey(), new byte[0]));
+                        }
+                    });
+                }
+        );
+
         //  Welcoming toast (Server -> Client)
         registrar.playToClient(
                 ShowWelcomeToastPayload.TYPE,
